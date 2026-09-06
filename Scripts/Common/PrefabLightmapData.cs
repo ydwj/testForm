@@ -1,0 +1,121 @@
+﻿using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEditor;
+
+public class PrefabLightmapData : MonoBehaviour
+{
+    [System.Serializable]
+    struct RendererInfo
+    {
+        public Renderer renderer;
+        public int lightmapIndex;
+        public Vector4 lightmapOffsetScale;
+    }
+
+    [SerializeField]
+    RendererInfo[] m_RendererInfo;
+    [SerializeField]
+    Texture2D[] m_Lightmaps;
+
+    void Awake()
+    {
+        if (m_RendererInfo == null || m_RendererInfo.Length == 0)
+            return;
+
+        var lightmaps = LightmapSettings.lightmaps;
+        var combinedLightmaps = new LightmapData[lightmaps.Length + m_Lightmaps.Length];
+
+        lightmaps.CopyTo(combinedLightmaps, 0);
+        for (int i = 0; i < m_Lightmaps.Length; i++)
+        {
+            combinedLightmaps[i + lightmaps.Length] = new LightmapData();
+            combinedLightmaps[i + lightmaps.Length].lightmapColor = m_Lightmaps[i];
+        }
+
+        ApplyRendererInfo(m_RendererInfo, lightmaps.Length);
+        LightmapSettings.lightmaps = combinedLightmaps;
+
+        StaticBatchingUtility.Combine(gameObject);
+    }
+
+
+    static void ApplyRendererInfo(RendererInfo[] infos, int lightmapOffsetIndex)
+    {
+        for (int i = 0; i < infos.Length; i++)
+        {
+            var info = infos[i];
+            if (info.renderer != null)
+            {
+                info.renderer.lightmapIndex = info.lightmapIndex + lightmapOffsetIndex;
+                info.renderer.lightmapScaleOffset = info.lightmapOffsetScale;
+            }
+        }
+    }
+
+#if UNITY_EDITOR
+    [UnityEditor.MenuItem("Assets/Bake Prefab Lightmaps")]
+    static void GenerateLightmapInfo()
+    {
+        if (UnityEditor.Lightmapping.giWorkflowMode != UnityEditor.Lightmapping.GIWorkflowMode.OnDemand)
+        {
+            Debuger.LogError("ExtractLightmapData requires that you have baked you lightmaps and Auto mode is disabled.");
+            return;
+        }
+
+        if (UnityEditor.Lightmapping.BakeAsync())
+        {
+            Lightmapping.bakeCompleted += () =>
+            {
+                PrefabLightmapData[] prefabs = FindObjectsOfType<PrefabLightmapData>();
+
+                foreach (var instance in prefabs)
+                {
+                    var gameObject = instance.gameObject;
+                    var rendererInfos = new List<RendererInfo>();
+                    var lightmaps = new List<Texture2D>();
+
+                    GenerateLightmapInfo(gameObject, rendererInfos, lightmaps);
+
+                    instance.m_RendererInfo = rendererInfos.ToArray();
+                    instance.m_Lightmaps = lightmaps.ToArray();
+
+                    Object targetPrefab = UnityEditor.PrefabUtility.GetCorrespondingObjectFromSource(gameObject);
+                    if (targetPrefab != null)
+                    {
+                        //UnityEditor.Prefab
+                        UnityEditor.PrefabUtility.ReplacePrefab(gameObject, targetPrefab);
+                        AssetDatabase.Refresh();
+                    }
+                }
+            };
+        }
+    }
+
+    static void GenerateLightmapInfo(GameObject root, List<RendererInfo> rendererInfos, List<Texture2D> lightmaps)
+    {
+        var renderers = root.GetComponentsInChildren<MeshRenderer>();
+        foreach (MeshRenderer renderer in renderers)
+        {
+            if (renderer.lightmapIndex != -1)
+            {
+                RendererInfo info = new RendererInfo();
+                info.renderer = renderer;
+                info.lightmapOffsetScale = renderer.lightmapScaleOffset;
+
+                Texture2D lightmap = LightmapSettings.lightmaps[renderer.lightmapIndex].lightmapColor;
+
+                info.lightmapIndex = lightmaps.IndexOf(lightmap);
+                if (info.lightmapIndex == -1)
+                {
+                    info.lightmapIndex = lightmaps.Count;
+                    lightmaps.Add(lightmap);
+                }
+
+                rendererInfos.Add(info);
+            }
+        }
+    }
+#endif
+
+}
